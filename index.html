@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e85d04">
+  <meta name="description" content="単品別売上集計リストPDFを読み取り、エンジンオイルを粘度別・商品別に集計します。">
+  <title>エンジンオイル 粘度別販売数集計</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div>
+        <p class="eyebrow">ENGINE OIL SALES ANALYZER</p>
+        <h1>エンジンオイル<br class="mobile-only">粘度別販売数集計</h1>
+        <p class="lead">売上PDFから、粘度ごとに「どの商品が何缶売れたか」を集計します。</p>
+      </div>
+      <div class="privacy-badge"><span aria-hidden="true">🔒</span><span>PDFは端末内で処理</span></div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="panel upload-panel" aria-labelledby="upload-title">
+      <div class="section-heading">
+        <div><p class="step-label">STEP 1</p><h2 id="upload-title">売上PDFを読み込む</h2></div>
+        <button id="loadSavedButton" class="button button-ghost" type="button">前回データを復元</button>
+      </div>
+
+      <label id="dropZone" class="drop-zone" for="fileInput">
+        <input id="fileInput" type="file" accept=".pdf,application/pdf,image/*" multiple>
+        <span class="drop-icon" aria-hidden="true">📄</span>
+        <strong>PDFを選択、またはここへドロップ</strong>
+        <span>複数PDFをまとめて読み込めます</span>
+      </label>
+      <div id="fileList" class="file-list" aria-live="polite"></div>
+
+      <details class="settings-box">
+        <summary>読み取り設定</summary>
+        <div class="settings-grid">
+          <label><span>OCR画像倍率</span><input id="ocrScaleInput" type="number" min="1.5" max="3.5" step="0.1" value="2.3"><small>文字が小さい場合は上げます。処理時間も増えます。</small></label>
+          <label><span>売上数量列の中心位置（%）</span><input id="quantityXInput" type="number" min="70" max="95" step="0.1" value="87.5"><small>添付形式では約87.5%が目安です。</small></label>
+          <label><span>数量列の許容幅（%）</span><input id="quantityToleranceInput" type="number" min="1" max="8" step="0.1" value="3.0"><small>単価や金額を拾う場合は小さくします。</small></label>
+          <label><span>商品名欄の右端（%）</span><input id="productNameEndInput" type="number" min="65" max="85" step="0.1" value="78.5"><small>商品名が途中で切れる場合は上げます。</small></label>
+          <label><span>同じ行とみなす高さ（%）</span><input id="rowToleranceInput" type="number" min="0.3" max="2.0" step="0.1" value="0.9"><small>商品名と数量が別行になる場合は上げます。</small></label>
+          <label class="checkbox-setting"><input id="includeBulkInput" type="checkbox" checked><span>量り売り商品も集計する</span></label>
+        </div>
+      </details>
+
+      <div class="action-row">
+        <button id="analyzeButton" class="button button-primary" type="button" disabled>読み取りを開始</button>
+        <button id="clearFilesButton" class="button button-secondary" type="button" disabled>選択を解除</button>
+      </div>
+
+      <div id="progressArea" class="progress-area hidden" aria-live="polite">
+        <div class="progress-head"><span id="progressLabel">準備中...</span><strong id="progressPercent">0%</strong></div>
+        <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+        <p id="progressDetail" class="progress-detail"></p>
+      </div>
+      <div id="messageBox" class="message-box hidden" role="status"></div>
+    </section>
+
+    <section id="resultsSection" class="results-section hidden" aria-labelledby="results-title">
+      <div class="section-heading results-heading">
+        <div><p class="step-label">STEP 2</p><h2 id="results-title">粘度別・商品別の販売数</h2></div>
+        <div class="result-actions">
+          <button id="saveButton" class="button button-ghost" type="button">端末に保存</button>
+          <button id="resetButton" class="button button-danger-ghost" type="button">全データ削除</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <article class="kpi-card"><span>販売数量合計</span><strong id="totalQuantityKpi">0</strong></article>
+        <article class="kpi-card"><span>粘度数</span><strong id="viscosityCountKpi">0</strong></article>
+        <article class="kpi-card"><span>商品数</span><strong id="productCountKpi">0</strong></article>
+        <article class="kpi-card warning"><span>粘度未判定</span><strong id="unknownCountKpi">0</strong></article>
+      </div>
+
+      <div class="toolbar panel">
+        <label class="search-box"><span aria-hidden="true">🔎</span><input id="searchInput" type="search" placeholder="粘度・商品名・商品コードで検索"></label>
+        <label><span class="sr-only">粘度で絞り込み</span><select id="viscosityFilter"><option value="">すべての粘度</option></select></label>
+        <label><span class="sr-only">並び順</span><select id="sortSelect"><option value="viscosity">粘度順</option><option value="quantity-desc">販売数が多い順</option><option value="product">商品名順</option></select></label>
+      </div>
+
+      <div class="view-tabs" role="tablist" aria-label="表示切替">
+        <button class="tab-button active" type="button" data-tab="summary" role="tab" aria-selected="true">粘度別集計</button>
+        <button class="tab-button" type="button" data-tab="detail" role="tab" aria-selected="false">読み取り明細・修正</button>
+        <button class="tab-button" type="button" data-tab="ocr" role="tab" aria-selected="false">OCR原文</button>
+      </div>
+
+      <section id="summaryTab" class="tab-panel active" role="tabpanel"><div id="summaryContainer" class="summary-container"></div></section>
+
+      <section id="detailTab" class="tab-panel" role="tabpanel">
+        <div class="detail-topbar"><p>誤読した商品名・粘度・数量は、この表で直接修正できます。</p><button id="addRowButton" class="button button-secondary" type="button">＋ 行を追加</button></div>
+        <div class="table-wrap">
+          <table class="detail-table">
+            <thead><tr><th>PDF・ページ</th><th>商品コード</th><th>商品名</th><th>粘度</th><th>販売数</th><th>区分</th><th>操作</th></tr></thead>
+            <tbody id="detailTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="ocrTab" class="tab-panel" role="tabpanel">
+        <p class="ocr-help">読み取り結果が少ない場合、OCR原文を修正して再解析できます。各商品行は「商品コード 商品名 単価 数量 金額」の順にしてください。</p>
+        <textarea id="ocrTextArea" rows="18" spellcheck="false"></textarea>
+        <div class="action-row"><button id="reparseButton" class="button button-secondary" type="button">OCR原文を再解析</button></div>
+      </section>
+
+      <section class="export-panel panel">
+        <div><p class="step-label">STEP 3</p><h2>集計結果を出力</h2><p>容量合計は出さず、粘度・商品・販売数だけを書き出します。</p></div>
+        <div class="export-buttons">
+          <button id="exportSummaryButton" class="button button-primary" type="button">粘度×商品CSV</button>
+          <button id="exportDetailButton" class="button button-secondary" type="button">読み取り明細CSV</button>
+          <button id="exportJsonButton" class="button button-ghost" type="button">バックアップJSON</button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="site-footer"><p>PDF.js + Tesseract.js / GitHub Pages対応</p></footer>
+
+  <datalist id="viscosityOptions">
+    <option value="0W-8"><option value="0W-12"><option value="0W-16"><option value="0W-20"><option value="0W-30"><option value="0W-40"><option value="5W-20"><option value="5W-30"><option value="5W-40"><option value="10W-30"><option value="10W-40"><option value="15W-40"><option value="20W-50"><option value="粘度不明">
+  </datalist>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
