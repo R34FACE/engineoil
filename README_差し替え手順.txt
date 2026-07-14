@@ -1,7 +1,7 @@
 修正内容:
-・pdf.destroy() を使わない処理に変更
-・PDF.js を 4.10.38 に固定
-・PDF内テキストがある場合は先に直接抽出、画像PDFの場合だけOCR
+・売上金額ではなく、右側3列の中央にある「売上数量」を読むように修正
+・OCR座標がズレても右端の金額列を数量として採用しないように修正
+・テキスト抽出時も末尾数値の右から2番目を売上数量として採用
 
 差し替え手順:
 1. GitHubの engineoil リポジトリを開く
@@ -9,4 +9,4 @@
 3. 右上の鉛筆マークで編集
 4. このZIP内の app.js の中身を全コピーして貼り替え
 5. Commit changes
-6. 数分後に https://r34face.github.io/engineoil/ を Ctrl+F5 で更新
+6. 数分後に https://r34face.github.io/engineoil/ を Ctrl+F5 で強制更新
