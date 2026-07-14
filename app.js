@@ -1,8 +1,8 @@
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-const STORAGE_KEY = "engineOilViscosityCounter.v3";
-const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v3";
+const STORAGE_KEY = "engineOilViscosityCounter.v4";
+const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v4";
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
@@ -162,6 +162,11 @@ async function analyzeFiles() {
   let completedPages = 0;
 
   try {
+    // 重要：再読み取り時に前回の誤読データを加算しない。
+    state.rows = [];
+    state.rawText = "";
+    localStorage.removeItem(STORAGE_KEY);
+
     for (const file of state.files) {
       totalPages += await countPages(file);
     }
@@ -177,22 +182,19 @@ async function analyzeFiles() {
     }
 
     const dictionary = getProductDictionary();
-    state.rows = mergeExactDuplicateRows([
-      ...state.rows,
-      ...newRows.map((row) => applyDictionary(row, dictionary)),
-    ]);
-    state.rawText = [state.rawText, ...rawChunks].filter(Boolean).join("\n\n");
+    state.rows = mergeExactDuplicateRows(newRows.map((row) => applyDictionary(row, dictionary)));
+    state.rawText = rawChunks.filter(Boolean).join("\n\n");
 
-    showProgress("集計が完了しました", 100, `${newRows.length}行を読み取りました。`);
+    showProgress("集計が完了しました", 100, `${state.rows.length}行を読み取りました。`);
     els.resultsSection.classList.remove("hidden");
     renderAll();
     saveData(false);
 
-    if (newRows.length === 0) {
+    if (state.rows.length === 0) {
       showMessage("商品行を抽出できませんでした。OCR原文タブまたは読み取り設定を確認してください。", true);
       activateTab("ocr");
     } else {
-      showMessage(`${newRows.length}件の商品行を追加しました。数量は「売上金額」ではなく、右側3列の中央にある「売上数量」列を使用しています。`);
+      showMessage(`${state.rows.length}件の商品行を読み取りました。数量は金額列を使わず、売上数量列だけを採用しています。`);
     }
   } catch (error) {
     console.error(error);
@@ -227,8 +229,8 @@ async function processPdf(file, completedPages, totalPages) {
     );
 
     const page = await pdf.getPage(pageNumber);
-
     const textResult = await parsePdfTextPage(page, file.name, pageNumber);
+
     if (textResult.text.trim()) {
       rawParts.push(`===== ${file.name} / ${pageNumber}ページ：PDFテキスト =====\n${textResult.text}`);
     }
@@ -240,9 +242,9 @@ async function processPdf(file, completedPages, totalPages) {
     }
 
     const canvas = await renderPageToCanvas(page);
-    const ocrRows = await recognizeCanvas(canvas, file.name, pageNumber);
-    rawParts.push(ocrRows.rawText);
-    rows.push(...ocrRows.rows);
+    const ocrResult = await recognizeCanvas(canvas, file.name, pageNumber);
+    rawParts.push(ocrResult.rawText);
+    rows.push(...ocrResult.rows);
     page.cleanup?.();
   }
 
@@ -325,13 +327,12 @@ async function recognizeCanvas(canvas, sourceFile, pageNumber) {
   const text = result.data.text || "";
   const tsv = result.data.tsv || "";
 
-  const positionalRows = parseTsvRows(tsv, processed.width, processed.height, sourceFile, pageNumber);
-  const fallbackRows = parseTextRows(text, sourceFile, pageNumber);
+  // OCR原文は確認用。自動集計は座標付きTSVだけを使用する。
+  // 通常テキストは列位置が消えるため、金額の一部を数量として拾う事故が起きやすい。
+  const rows = parseTsvRows(tsv, processed.width, processed.height, sourceFile, pageNumber);
 
   return {
-    rows: positionalRows.length >= Math.max(2, fallbackRows.length * 0.4)
-      ? positionalRows
-      : fallbackRows,
+    rows,
     rawText: `===== ${sourceFile} / ${pageNumber}ページ：OCR原文 =====\n${text}`,
   };
 }
@@ -439,6 +440,7 @@ function parseTsvRows(tsv, width, height, sourceFile, pageNumber) {
     )
     .map((word) => ({
       ...word,
+      right: word.left + word.width,
       centerX: word.left + word.width / 2,
       centerY: word.top + word.height / 2,
     }))
@@ -473,7 +475,9 @@ function parseTsvRows(tsv, width, height, sourceFile, pageNumber) {
     const productCode = normalizeProductCode(codeWord.text);
     const quantityToken = pickSalesQuantityToken(lineWords, width);
 
-    if (!quantityToken) continue;
+    if (!quantityToken) {
+      continue;
+    }
 
     const quantity = parseInteger(quantityToken.text);
     if (!Number.isFinite(quantity) || quantity < 0 || quantity > 100000) continue;
@@ -520,31 +524,44 @@ function pickSalesQuantityToken(lineWords, width) {
   const rightNumbers = getRightNumberTokens(lineWords, width);
   if (rightNumbers.length === 0) return null;
 
-  // 添付帳票の右側3列は「売価単価」「売上数量」「売上金額」。
-  // 売上数量は右から2番目なので、金額列を読ませないために、
-  // まず 87.5%〜94.0% の売上数量ゾーンだけを見る。
-  const quantityCenter = width * (clamp(Number(els.quantityXInput.value), 86, 94, 90.4) / 100);
-  const quantityBand = rightNumbers.filter((word) =>
-    word.centerX >= width * 0.875 &&
-    word.centerX < width * 0.94
-  );
-
-  if (quantityBand.length > 0) {
-    return quantityBand.sort((a, b) =>
-      Math.abs(a.centerX - quantityCenter) - Math.abs(b.centerX - quantityCenter)
-    )[0];
+  // 帳票の右側3列:
+  // 1) 売価単価: おおむね 78〜84%
+  // 2) 売上数量: おおむね 88〜92.5%
+  // 3) 売上金額: おおむね 94%以降
+  // 金額列の「44,396」が分割されて「44」だけ拾われる事故を避けるため、
+  // 売上数量ゾーン外の数字は絶対に採用しない。
+  let centerPercent = Number(els.quantityXInput.value);
+  if (!Number.isFinite(centerPercent) || centerPercent < 88.0 || centerPercent > 93.0) {
+    centerPercent = 90.4;
   }
 
-  // OCRの座標がズレた場合でも、右側数値列の「右から2番目」を数量として扱う。
-  // 右端は売上金額なので採用しない。
-  if (rightNumbers.length >= 2) {
-    return rightNumbers[rightNumbers.length - 2];
+  let tolerancePercent = Number(els.quantityToleranceInput.value);
+  if (!Number.isFinite(tolerancePercent) || tolerancePercent <= 0 || tolerancePercent > 2.2) {
+    tolerancePercent = 1.6;
   }
 
-  const only = rightNumbers[0];
-  if (only.centerX >= width * 0.86 && only.centerX < width * 0.94) return only;
+  const centerX = width * (centerPercent / 100);
+  const tolerance = width * (tolerancePercent / 100);
+  const hardMin = width * 0.875;
+  const hardMax = width * 0.935;
 
-  return null;
+  const candidates = rightNumbers
+    .filter((word) =>
+      word.centerX >= hardMin &&
+      word.centerX <= hardMax &&
+      Math.abs(word.centerX - centerX) <= tolerance
+    )
+    .sort((a, b) => Math.abs(a.centerX - centerX) - Math.abs(b.centerX - centerX));
+
+  if (candidates.length === 0) return null;
+
+  // 数量は基本的に小さい整数。金額や単価らしい4桁以上は除外。
+  const plausible = candidates.filter((word) => {
+    const value = parseInteger(word.text);
+    return Number.isFinite(value) && value >= 0 && value <= 999;
+  });
+
+  return plausible[0] || null;
 }
 
 function parseTextRows(text, sourceFile, pageNumber) {
@@ -590,14 +607,21 @@ function parseTextLine(line, sourceFile, pageNumber) {
     trailingNumbers.unshift(tokens.pop());
   }
 
-  // 右側の数値列は「売価単価」「売上数量」「売上金額」。
-  // テキスト抽出では座標が使えないため、末尾数値の右から2番目を売上数量とする。
-  if (trailingNumbers.length < 2) return null;
+  // PDFテキスト抽出用。末尾数値が「単価 数量 金額」の3列で取れる場合だけ採用。
+  if (trailingNumbers.length < 3) return null;
 
+  const unitPrice = parseInteger(trailingNumbers[trailingNumbers.length - 3]);
   const quantity = parseInteger(trailingNumbers[trailingNumbers.length - 2]);
-  const productName = cleanProductName(tokens.join(" "));
+  const amount = parseInteger(trailingNumbers[trailingNumbers.length - 1]);
 
-  if (!productName || !Number.isFinite(quantity) || quantity < 0 || quantity > 100000) return null;
+  // 数量としてあり得ない値なら採用しない。
+  if (!Number.isFinite(quantity) || quantity < 0 || quantity > 999) return null;
+
+  // 単価・金額らしさが全くない場合は、列崩れとみなして採用しない。
+  if (!Number.isFinite(unitPrice) || !Number.isFinite(amount)) return null;
+
+  const productName = cleanProductName(tokens.join(" "));
+  if (!productName) return null;
 
   return makeRow({
     sourceFile,
@@ -1030,7 +1054,7 @@ function activateTab(tabName) {
 
 function saveData(showToast) {
   const payload = {
-    version: 3,
+    version: 4,
     savedAt: new Date().toISOString(),
     rows: state.rows,
     rawText: state.rawText,
@@ -1105,7 +1129,7 @@ function exportDetailCsv() {
 function exportJson() {
   downloadBlob(
     JSON.stringify({
-      version: 3,
+      version: 4,
       exportedAt: new Date().toISOString(),
       rows: state.rows,
       rawText: state.rawText,
