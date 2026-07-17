@@ -1,8 +1,8 @@
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-const STORAGE_KEY = "engineOilViscosityCounter.v5";
-const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v5";
+const STORAGE_KEY = "engineOilViscosityCounter.v6";
+const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v6";
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
@@ -52,9 +52,201 @@ const els = {
   includeBulkInput: $("#includeBulkInput"),
 };
 
+injectReadableSummaryStyles();
 bindEvents();
 renderFiles();
 setButtons();
+
+
+function injectReadableSummaryStyles() {
+  if (document.querySelector("#readableOilSummaryStyle")) return;
+
+  const style = document.createElement("style");
+  style.id = "readableOilSummaryStyle";
+  style.textContent = `
+    .oil-summary-card {
+      border: 2px solid #f0d1bc;
+      box-shadow: 0 10px 24px rgba(32, 38, 45, 0.08);
+    }
+
+    .oil-summary-head {
+      grid-template-columns: minmax(150px, 0.75fr) minmax(260px, 1.4fr) auto !important;
+      background: linear-gradient(90deg, #fffaf6 0%, #ffffff 58%, #fff4ec 100%);
+    }
+
+    .oil-viscosity-main {
+      display: grid;
+      gap: 2px;
+    }
+
+    .oil-viscosity-label,
+    .oil-top-label {
+      color: var(--muted);
+      font-size: 0.76rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+
+    .oil-viscosity-name {
+      font-size: 1.85rem !important;
+      line-height: 1.05;
+    }
+
+    .oil-product-count {
+      font-weight: 800;
+    }
+
+    .oil-top-product {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+
+    .oil-top-product strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 1rem;
+    }
+
+    .oil-total-box {
+      min-width: 145px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      background: var(--orange);
+      color: #fff;
+      text-align: center !important;
+      box-shadow: 0 6px 16px rgba(232, 93, 4, 0.22);
+    }
+
+    .oil-total-box span,
+    .oil-total-box strong {
+      color: #fff !important;
+    }
+
+    .oil-total-box strong {
+      font-size: 1.7rem !important;
+      line-height: 1.1;
+    }
+
+    .oil-list-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 130px;
+      gap: 14px;
+      padding: 9px 19px;
+      color: var(--muted);
+      background: #f7f8fa;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.78rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+
+    .oil-list-header span:last-child {
+      text-align: right;
+    }
+
+    .oil-product-row {
+      grid-template-columns: minmax(0, 1fr) 130px !important;
+      padding: 15px 19px !important;
+      background: #fff;
+    }
+
+    .oil-product-row:nth-child(even) {
+      background: #fffdfb;
+    }
+
+    .oil-product-main {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .oil-product-name {
+      font-size: 1.08rem;
+      font-weight: 900 !important;
+      line-height: 1.35;
+      color: var(--ink);
+      word-break: break-word;
+    }
+
+    .oil-product-sub {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .oil-product-sub span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #f1f3f5;
+    }
+
+    .oil-qty-badge {
+      justify-self: end;
+      min-width: 108px;
+      padding: 8px 10px;
+      border-radius: 13px;
+      background: var(--orange-soft);
+      color: var(--orange-dark);
+      text-align: center !important;
+      border: 1px solid #ffd1ad;
+    }
+
+    .oil-qty-badge strong {
+      display: inline;
+      font-size: 1.45rem;
+      line-height: 1;
+    }
+
+    .oil-qty-badge span {
+      margin-left: 3px;
+      font-size: 0.9rem;
+      font-weight: 900;
+    }
+
+    @media (max-width: 720px) {
+      .oil-summary-head {
+        grid-template-columns: 1fr !important;
+      }
+
+      .oil-total-box {
+        width: 100%;
+      }
+
+      .oil-top-product strong {
+        white-space: normal;
+      }
+
+      .oil-list-header {
+        grid-template-columns: 1fr 96px;
+      }
+
+      .oil-product-row {
+        grid-template-columns: minmax(0, 1fr) 96px !important;
+      }
+
+      .oil-product-name {
+        font-size: 1rem;
+      }
+
+      .oil-qty-badge {
+        min-width: 86px;
+      }
+
+      .oil-qty-badge strong {
+        font-size: 1.25rem;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 function bindEvents() {
   els.fileInput.addEventListener("change", (event) => {
@@ -882,6 +1074,26 @@ function groupSummary(rows) {
   return viscosityMap;
 }
 
+function resolveGroupUnit(products) {
+  const units = new Set(products.map((product) => product.unitLabel));
+  if (units.size === 1) return [...units][0];
+  return "点";
+}
+
+function cleanDisplayOilName(productName) {
+  return String(productName || "")
+    .normalize("NFKC")
+    .replace(/\\s+/g, " ")
+    .replace(/^(MR\\.AUTOBACS|AUTOBACS|Castrol|カストロール|Mobil|モービル|QUAKER STATE|クエーカーステート)\\s*/i, (match) => match.trim() + " ")
+    .trim();
+}
+
+function shortenOilName(productName) {
+  const name = cleanDisplayOilName(productName);
+  return name.length > 34 ? `${name.slice(0, 34)}…` : name;
+}
+
+
 function renderSummary() {
   let groups = [...groupSummary(getVisibleRows()).values()];
 
@@ -902,28 +1114,50 @@ function renderSummary() {
 
   groups.forEach((group, index) => {
     const details = document.createElement("details");
-    details.className = "viscosity-card";
-    details.open = index < 3 || group.viscosity === "粘度不明";
+    details.className = "viscosity-card oil-summary-card";
+    details.open = index < 5 || group.viscosity === "粘度不明";
 
     const products = [...group.products].sort((a, b) =>
       b.quantity - a.quantity || a.productName.localeCompare(b.productName, "ja")
     );
 
+    const totalUnit = resolveGroupUnit(products);
+    const topProduct = products[0];
+
     details.innerHTML = `
-      <summary>
-        <span class="viscosity-name">${escapeHtml(group.viscosity)}</span>
-        <span class="viscosity-meta">${group.products.length}商品</span>
-        <span class="viscosity-total">
-          <strong>${group.totalQuantity.toLocaleString("ja-JP")}</strong>
-          <span>販売数量合計</span>
-        </span>
+      <summary class="oil-summary-head">
+        <div class="oil-viscosity-main">
+          <span class="oil-viscosity-label">粘度</span>
+          <strong class="viscosity-name oil-viscosity-name">${escapeHtml(group.viscosity)}</strong>
+          <span class="viscosity-meta oil-product-count">${group.products.length}商品</span>
+        </div>
+        <div class="oil-top-product">
+          <span class="oil-top-label">一番売れたオイル</span>
+          <strong>${topProduct ? escapeHtml(shortenOilName(topProduct.productName)) : "-"}</strong>
+        </div>
+        <div class="viscosity-total oil-total-box">
+          <span>この粘度の合計</span>
+          <strong>${group.totalQuantity.toLocaleString("ja-JP")}${escapeHtml(totalUnit)}</strong>
+        </div>
       </summary>
-      <div class="product-list">
+      <div class="product-list oil-product-list">
+        <div class="oil-list-header">
+          <span>オイル名</span>
+          <span>販売数</span>
+        </div>
         ${products.map((product) => `
-          <div class="product-row">
-            <span class="product-code">${escapeHtml(product.productCode)}</span>
-            <span class="product-name">${escapeHtml(product.productName)}</span>
-            <span class="product-qty">${product.quantity.toLocaleString("ja-JP")}${escapeHtml(product.unitLabel)}</span>
+          <div class="product-row oil-product-row">
+            <div class="oil-product-main">
+              <div class="product-name oil-product-name">${escapeHtml(cleanDisplayOilName(product.productName))}</div>
+              <div class="oil-product-sub">
+                <span class="product-code">${escapeHtml(product.productCode)}</span>
+                <span>${escapeHtml(product.unitLabel === "件" ? "量り売り" : "缶商品")}</span>
+              </div>
+            </div>
+            <div class="product-qty oil-qty-badge">
+              <strong>${product.quantity.toLocaleString("ja-JP")}</strong>
+              <span>${escapeHtml(product.unitLabel)}</span>
+            </div>
           </div>
         `).join("")}
       </div>
@@ -1060,7 +1294,7 @@ function activateTab(tabName) {
 
 function saveData(showToast) {
   const payload = {
-    version: 5,
+    version: 6,
     savedAt: new Date().toISOString(),
     rows: state.rows,
     rawText: state.rawText,
@@ -1135,7 +1369,7 @@ function exportDetailCsv() {
 function exportJson() {
   downloadBlob(
     JSON.stringify({
-      version: 5,
+      version: 6,
       exportedAt: new Date().toISOString(),
       rows: state.rows,
       rawText: state.rawText,
