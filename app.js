@@ -1,8 +1,8 @@
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-const STORAGE_KEY = "engineOilViscosityCounter.v4";
-const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v4";
+const STORAGE_KEY = "engineOilViscosityCounter.v5";
+const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v5";
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
@@ -327,9 +327,15 @@ async function recognizeCanvas(canvas, sourceFile, pageNumber) {
   const text = result.data.text || "";
   const tsv = result.data.tsv || "";
 
-  // OCR原文は確認用。自動集計は座標付きTSVだけを使用する。
-  // 通常テキストは列位置が消えるため、金額の一部を数量として拾う事故が起きやすい。
-  const rows = parseTsvRows(tsv, processed.width, processed.height, sourceFile, pageNumber);
+  const positionalRows = parseTsvRows(tsv, processed.width, processed.height, sourceFile, pageNumber);
+  const textRows = parseTextRows(text, sourceFile, pageNumber);
+
+  // 座標付きTSVを優先。ただしTSVで数量列を拾えないページは、
+  // OCR原文から「末尾の数値列 = 単価 → 数量 → 金額」として安全に復旧する。
+  // 金額が 44 396 のように分割されても、数量は単価の次の数字だけを使う。
+  const rows = positionalRows.length >= Math.max(2, textRows.length * 0.45)
+    ? positionalRows
+    : textRows;
 
   return {
     rows,
@@ -607,18 +613,18 @@ function parseTextLine(line, sourceFile, pageNumber) {
     trailingNumbers.unshift(tokens.pop());
   }
 
-  // PDFテキスト抽出用。末尾数値が「単価 数量 金額」の3列で取れる場合だけ採用。
+  // 末尾数値列は「単価 → 数量 → 金額」。
+  // 金額が 44 396 のように2分割されても、数量は「単価の次の数字」だけを使う。
+  // つまり右から2番目ではなく、末尾数値列の左から2番目を採用する。
   if (trailingNumbers.length < 3) return null;
 
-  const unitPrice = parseInteger(trailingNumbers[trailingNumbers.length - 3]);
-  const quantity = parseInteger(trailingNumbers[trailingNumbers.length - 2]);
-  const amount = parseInteger(trailingNumbers[trailingNumbers.length - 1]);
+  const unitPrice = parseInteger(trailingNumbers[0]);
+  const quantity = parseInteger(trailingNumbers[1]);
+  const amountPart = parseInteger(trailingNumbers[trailingNumbers.length - 1]);
 
-  // 数量としてあり得ない値なら採用しない。
+  if (!Number.isFinite(unitPrice) || unitPrice < 0) return null;
   if (!Number.isFinite(quantity) || quantity < 0 || quantity > 999) return null;
-
-  // 単価・金額らしさが全くない場合は、列崩れとみなして採用しない。
-  if (!Number.isFinite(unitPrice) || !Number.isFinite(amount)) return null;
+  if (!Number.isFinite(amountPart) || amountPart < 0) return null;
 
   const productName = cleanProductName(tokens.join(" "));
   if (!productName) return null;
@@ -1054,7 +1060,7 @@ function activateTab(tabName) {
 
 function saveData(showToast) {
   const payload = {
-    version: 4,
+    version: 5,
     savedAt: new Date().toISOString(),
     rows: state.rows,
     rawText: state.rawText,
@@ -1129,7 +1135,7 @@ function exportDetailCsv() {
 function exportJson() {
   downloadBlob(
     JSON.stringify({
-      version: 4,
+      version: 5,
       exportedAt: new Date().toISOString(),
       rows: state.rows,
       rawText: state.rawText,
