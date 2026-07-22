@@ -1,8 +1,8 @@
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-const STORAGE_KEY = "engineOilViscosityCounter.v6";
-const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v6";
+const STORAGE_KEY = "engineOilViscosityCounter.v7";
+const PRODUCT_DICTIONARY_KEY = "engineOilProductDictionary.v7";
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
@@ -209,6 +209,15 @@ function injectReadableSummaryStyles() {
       margin-left: 3px;
       font-size: 0.9rem;
       font-weight: 900;
+    }
+
+
+    .oil-summary-head-simple {
+      grid-template-columns: minmax(160px, 1fr) auto !important;
+    }
+
+    .oil-total-box-wide {
+      min-width: 180px;
     }
 
     @media (max-width: 720px) {
@@ -763,25 +772,24 @@ function pickSalesQuantityToken(lineWords, width) {
 }
 
 function parseTextRows(text, sourceFile, pageNumber) {
-  const lines = normalizeOcrText(text).split("\n");
+  const normalized = normalizeOcrText(text)
+    .replace(/(\d{8})(?=\S)/g, "$1 ")
+    .replace(/(?<!\d)(\d{8})(?=\s)/g, "\n$1 ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  if (!normalized) return [];
+
+  const chunks = normalized
+    .split(/\n(?=\d{8}\s)/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+
   const rows = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const current = lines[index].trim();
-    if (!current) continue;
-
-    const candidates = [current];
-    if (index + 1 < lines.length) candidates.push(`${current} ${lines[index + 1].trim()}`);
-    if (index + 2 < lines.length) candidates.push(`${current} ${lines[index + 1].trim()} ${lines[index + 2].trim()}`);
-
-    let parsed = null;
-    for (const candidate of candidates) {
-      parsed = parseTextLine(candidate, sourceFile, pageNumber);
-      if (parsed) break;
-    }
-
-    if (parsed) rows.push(parsed);
-  }
+  chunks.forEach((chunk) => {
+    const row = parseTextLine(chunk, sourceFile, pageNumber);
+    if (row) rows.push(row);
+  });
 
   return dedupePageRows(rows);
 }
@@ -792,34 +800,53 @@ function parseTextLine(line, sourceFile, pageNumber) {
     .replace(/\s+/g, " ")
     .trim();
 
-  const codeMatch = normalized.match(/^([0-9OIl|]{7,9})\s+(.+)$/i);
+  const codeMatch = normalized.match(/^(\d{8})\s+(.+)$/);
   if (!codeMatch) return null;
 
   const productCode = normalizeProductCode(codeMatch[1]);
   if (productCode.length !== 8) return null;
 
-  const tokens = codeMatch[2].trim().split(/\s+/);
-  const trailingNumbers = [];
+  let rest = codeMatch[2]
+    .replace(/\s+\d{8}\s+.*$/, "")
+    .trim();
 
-  while (tokens.length > 0 && isIntegerToken(tokens[tokens.length - 1])) {
-    trailingNumbers.unshift(tokens.pop());
+  const numberMatches = [...rest.matchAll(/\d[\d,]*/g)].map((match) => ({
+    text: match[0],
+    index: match.index ?? 0,
+  }));
+
+  if (numberMatches.length < 3) return null;
+
+  // 右端側の数値列から「単価・数量・金額」を拾う。
+  // 金額が 44 396 のように分割されても、数量は右端3ブロックの左から2番目を使う。
+  const tail = numberMatches.slice(-4);
+  let qtyCandidate = null;
+
+  if (tail.length >= 4) {
+    const a = parseInteger(tail[0].text);
+    const b = parseInteger(tail[1].text);
+    const c = parseInteger(tail[2].text);
+    const d = parseInteger(tail[3].text);
+    if (Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d)) {
+      // [単価, 数量, 金額前半, 金額後半]
+      qtyCandidate = b;
+    }
   }
 
-  // 末尾数値列は「単価 → 数量 → 金額」。
-  // 金額が 44 396 のように2分割されても、数量は「単価の次の数字」だけを使う。
-  // つまり右から2番目ではなく、末尾数値列の左から2番目を採用する。
-  if (trailingNumbers.length < 3) return null;
+  if (!Number.isFinite(qtyCandidate)) {
+    const tail3 = numberMatches.slice(-3);
+    const a = parseInteger(tail3[0].text);
+    const b = parseInteger(tail3[1].text);
+    const c = parseInteger(tail3[2].text);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return null;
+    qtyCandidate = b;
+  }
 
-  const unitPrice = parseInteger(trailingNumbers[0]);
-  const quantity = parseInteger(trailingNumbers[1]);
-  const amountPart = parseInteger(trailingNumbers[trailingNumbers.length - 1]);
+  if (!Number.isFinite(qtyCandidate) || qtyCandidate < 0 || qtyCandidate > 999) return null;
 
-  if (!Number.isFinite(unitPrice) || unitPrice < 0) return null;
-  if (!Number.isFinite(quantity) || quantity < 0 || quantity > 999) return null;
-  if (!Number.isFinite(amountPart) || amountPart < 0) return null;
-
-  const productName = cleanProductName(tokens.join(" "));
-  if (!productName) return null;
+  const productNameEnd = numberMatches[numberMatches.length - Math.min(numberMatches.length, 4)].index;
+  const productName = cleanProductName(rest.slice(0, productNameEnd));
+  if (!productName || productName.length < 3) return null;
 
   return makeRow({
     sourceFile,
@@ -827,7 +854,7 @@ function parseTextLine(line, sourceFile, pageNumber) {
     productCode,
     productName,
     viscosity: detectViscosity(productName),
-    quantity,
+    quantity: qtyCandidate,
   });
 }
 
@@ -1122,20 +1149,15 @@ function renderSummary() {
     );
 
     const totalUnit = resolveGroupUnit(products);
-    const topProduct = products[0];
 
     details.innerHTML = `
-      <summary class="oil-summary-head">
+      <summary class="oil-summary-head oil-summary-head-simple">
         <div class="oil-viscosity-main">
           <span class="oil-viscosity-label">粘度</span>
           <strong class="viscosity-name oil-viscosity-name">${escapeHtml(group.viscosity)}</strong>
-          <span class="viscosity-meta oil-product-count">${group.products.length}商品</span>
+          <span class="viscosity-meta oil-product-count">${group.products.length}種類</span>
         </div>
-        <div class="oil-top-product">
-          <span class="oil-top-label">一番売れたオイル</span>
-          <strong>${topProduct ? escapeHtml(shortenOilName(topProduct.productName)) : "-"}</strong>
-        </div>
-        <div class="viscosity-total oil-total-box">
+        <div class="oil-total-box oil-total-box-wide">
           <span>この粘度の合計</span>
           <strong>${group.totalQuantity.toLocaleString("ja-JP")}${escapeHtml(totalUnit)}</strong>
         </div>
@@ -1294,7 +1316,7 @@ function activateTab(tabName) {
 
 function saveData(showToast) {
   const payload = {
-    version: 6,
+    version: 7,
     savedAt: new Date().toISOString(),
     rows: state.rows,
     rawText: state.rawText,
@@ -1369,7 +1391,7 @@ function exportDetailCsv() {
 function exportJson() {
   downloadBlob(
     JSON.stringify({
-      version: 6,
+      version: 7,
       exportedAt: new Date().toISOString(),
       rows: state.rows,
       rawText: state.rawText,
